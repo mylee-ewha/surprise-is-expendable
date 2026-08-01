@@ -1,0 +1,7 @@
+gpu_id: "4"
+model_name: "Qwen/Qwen3-8B"
+kv_budgets: [512, 1024, 2048, 4096]
+methods: ["novelty_inv", "k_norm"]
+max_new_tokens: 8192
+n_samples: 500
+out_dir: "results/math500"

@@ -1,0 +1,6 @@
+gpu_id: "5"
+model_name: "Qwen/Qwen3-8B"
+kv_budgets: [512, 1024, 2048, 4096]
+methods: ["novelty_inv", "k_norm"]
+max_new_tokens: 16384
+out_dir: "results/gpqa_ablation"

@@ -1,0 +1,33 @@
+# experiment results
+results/
+vtilde_logs/
+vtilde_plots/
+analysis/plots/
+
+# file type
+*.npz
+*.pdf
+*.jsonl
+
+# python
+__pycache__/
+*.pyc
+.eggs/
+
+# environments
+.env
+venv/
+.venv/
+*.egg-info/
+
+# models / data cache
+.cache/
+*.bin
+*.safetensors
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
