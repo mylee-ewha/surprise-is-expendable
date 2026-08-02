@@ -28,11 +28,12 @@ from src.utils.io import _load_completed
 # ═══════════════════════════════════════════════════════════════
 # Config
 # ═══════════════════════════════════════════════════════════════
-GPU_ID            = "3"
+GPU_ID            = "5"
 MODEL_NAME        = "Qwen/Qwen3-8B"
 KV_BUDGETS        = [512, 1024, 2048, 4096]
-METHODS           = ["novelty_inv", "k_norm"]
-METHODS_SAVE_TEXT = {"novelty_inv", "k_norm", "baseline"}
+#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random"]
+METHODS           = ["random"]
+METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline"}
 MAX_NEW_TOKENS_EXP = 16384             # GPQA는 긴 추론 필요
 OUT_DIR           = Path("results/gpqa_ablation")
 

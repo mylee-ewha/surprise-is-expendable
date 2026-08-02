@@ -23,6 +23,8 @@ _METHOD_NEEDS = {
     "novelty_inv":    {"hidden_states": False, "v_hook": True}, 
     "v_angular":     {"hidden_states": False, "v_hook": True},
     "v_angular_inv": {"hidden_states": False, "v_hook": True},
+    "lru": {"hidden_states": False, "v_hook": False},
+    "random": {"hidden_states": False, "v_hook": False},
 }
 
 _EVICT_HIGHEST = {"donut_a_v2_inv", "novelty_inv", "v_angular_inv"}
@@ -114,6 +116,7 @@ def generate_with_scored_eviction(
         generated_ids = []
         generated_text_buf = ""
         torch.manual_seed(GEN_SEED)
+        np.random.seed(GEN_SEED)
         next_token = sample_next_token(next_logits)
         generated_ids.append(next_token.item())
 
@@ -142,6 +145,10 @@ def generate_with_scored_eviction(
                     score = scorer.score_donut_a_v2(hs)
                 elif method in ("novelty", "novelty_inv"):
                     score = scorer.score_novelty(v_storage)
+                elif method == "lru":
+                    score = float(think_generated_count)
+                elif method == "random":
+                    score = float(np.random.random())
                 else:  # v_angular, v_angular_inv
                     score = scorer.score_v_angular(v_storage)
                 think_scores.append(score)
