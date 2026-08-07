@@ -8,8 +8,7 @@ R_PROJ: torch.Tensor = None
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-#N_LAYERS = 36
-N_LAYERS = 32
+N_LAYERS = None
 WINDOW = 32
 MIN_PERIODS = 16
 DONUT_BAND = range(24, 37)
@@ -94,8 +93,9 @@ class PerSampleScorer:
         return donut_sum if any_valid else float("nan")
 
     def score_novelty(self, v_storage) -> float:
+        n_layers = N_LAYERS if N_LAYERS is not None else max(v_storage.keys())
         scores = []
-        for li in range(1, N_LAYERS + 1):
+        for li in range(1, n_layers + 1):
             if li not in v_storage:
                 continue
             v_vec = v_storage[li][0, 0].float()        # [v_dim]

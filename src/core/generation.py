@@ -5,6 +5,7 @@ from transformers import DynamicCache
 from .cache_ops import remove_hooks, register_v_hook, cache_memory_bytes, BlockRegistry, extract_last_position_knorm, RECENT_SIZE, evict_from_cache
 from .scorers import PerSampleScorer, N_LAYERS
 from ..utils.metrics import extract_boxed_answer
+from ..methods.raas import RAAS_R
 
 
 EVICT_INTERVAL = 128  # lazy eviction 간격
@@ -25,6 +26,7 @@ _METHOD_NEEDS = {
     "v_angular_inv": {"hidden_states": False, "v_hook": True},
     "lru": {"hidden_states": False, "v_hook": False},
     "random": {"hidden_states": False, "v_hook": False},
+    "raas": {"hidden_states": False, "v_hook": False, "output_attentions": True}
 }
 
 _EVICT_HIGHEST = {"donut_a_v2_inv", "novelty_inv", "v_angular_inv"}
@@ -138,6 +140,28 @@ def generate_with_scored_eviction(
             reg.register_new_token()
 
             if in_think:
+                if method =="raas":
+                    attentions = step_out.attentions
+                    if attentions is None:
+                        raise RuntimeError(
+                            "RaaS requires output_attentions=True, but got None. "
+                            "Load model with attn_implementation='sdpa' or 'eager'."
+                        )
+                    if len(think_scores) > 0:
+                        seq_k = attentions[0].shape[-1]
+                        # all layers +  all head mean attention: [seq_k]
+                        avg_attn = torch.zeros(seq_k, dtype=torch.float32)
+                        for la in attentions:
+                            avg_attn += la[0, :, 0, :seq_k].mean(dim=0).cpu().float()
+                            avg_attn /= len(attentions)
+
+                            # extract attention values received by each think token
+                            think_attn = torch.tensor([float(avg_attn[prompt_len + j]) if (prompt_len + j) < seq_k else 0.0 for j in range(len(think_scores))])
+                            # top-r = 0.5: Token that received median-level or higher attention -> timestamp updated
+                            median_val = think_attn.median().item()
+                            for j in range(len(think_scores)):
+                                if float(think_attn[j]) >= median_val:
+                                    think_scores[j] = float(think_generated_count)
                 if method == "k_norm":
                     score = extract_last_position_knorm(cache)
                 elif method in ("donut_a_v2", "donut_a_v2_inv"): 
@@ -149,6 +173,8 @@ def generate_with_scored_eviction(
                     score = float(think_generated_count)
                 elif method == "random":
                     score = float(np.random.random())
+                elif method == "raas":
+                    score = float(think_generated_count)
                 else:  # v_angular, v_angular_inv
                     score = scorer.score_v_angular(v_storage)
                 think_scores.append(score)
