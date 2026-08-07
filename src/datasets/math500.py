@@ -19,8 +19,9 @@ def load_fixed_subset(n: int = N_SAMPLES, seed: int = SEED):
 # Prompt
 # ---------------------------------------------------------------------------
 
-def build_prompt(tokenizer, question: str) -> str:
+def build_prompt(tokenizer, question: str, enable_thinking: bool = True) -> str:
     messages = [{"role": "user", "content": question}]
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True, enable_thinking=True
-    )
+    kwargs = dict(tokenize=False, add_generation_prompt=True)
+    if enable_thinking:
+        kwargs["enable_thinking"] = True
+    return tokenizer.apply_chat_template(messages, **kwargs)
