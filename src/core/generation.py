@@ -16,20 +16,24 @@ GEN_SEED = 42
 MAX_NEW_TOKENS = 8192
 
 _METHOD_NEEDS = {
-    "baseline":   {"hidden_states": False, "v_hook": False},
-    "k_norm":     {"hidden_states": False, "v_hook": False},
-    "donut_a_v2": {"hidden_states": True,  "v_hook": False},
-    "novelty":    {"hidden_states": False, "v_hook": True},
-    "donut_a_v2_inv": {"hidden_states": True,  "v_hook": False}, 
-    "novelty_inv":    {"hidden_states": False, "v_hook": True}, 
-    "v_angular":     {"hidden_states": False, "v_hook": True},
-    "v_angular_inv": {"hidden_states": False, "v_hook": True},
-    "lru": {"hidden_states": False, "v_hook": False},
-    "random": {"hidden_states": False, "v_hook": False},
-    "raas": {"hidden_states": False, "v_hook": False, "output_attentions": True}
+    "baseline":       {"hidden_states": False, "v_hook": False, "output_attentions": False},
+    "k_norm":         {"hidden_states": False, "v_hook": False, "output_attentions": False},
+    "donut_a_v2":     {"hidden_states": True,  "v_hook": False, "output_attentions": False},
+    "novelty":        {"hidden_states": False, "v_hook": True,  "output_attentions": False},
+    "donut_a_v2_inv": {"hidden_states": True,  "v_hook": False, "output_attentions": False},
+    "novelty_inv":    {"hidden_states": False, "v_hook": True,  "output_attentions": False},
+    "v_angular":      {"hidden_states": False, "v_hook": True,  "output_attentions": False},
+    "v_angular_inv":  {"hidden_states": False, "v_hook": True,  "output_attentions": False},
+    "lru":            {"hidden_states": False, "v_hook": False, "output_attentions": False},
+    "random":         {"hidden_states": False, "v_hook": False, "output_attentions": False},
+    # RaaS: attention score 기반 timestamp LRU
+    # output_attentions=True → FA bypass, eager/sdpa 모드 필요
+    # accuracy ablation 목적의 token-level naive 구현 (논문의 page-based 아님)
+    "raas":           {"hidden_states": False, "v_hook": False, "output_attentions": True},
 }
 
 _EVICT_HIGHEST = {"donut_a_v2_inv", "novelty_inv", "v_angular_inv"}
+
 
 def sample_next_token(logits, temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K):
     logits = logits.float() / temperature
@@ -48,6 +52,7 @@ def sample_next_token(logits, temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K)
     probs = torch.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1)
 
+
 # ---------------------------------------------------------------------------
 # Generation with scored streaming eviction (thinking-block only)
 # ---------------------------------------------------------------------------
@@ -57,9 +62,9 @@ def generate_with_scored_eviction(
     model, tokenizer, prompt, method, budget, device,
     max_new_tokens=MAX_NEW_TOKENS,
 ):
-    # ── [개선 2] method별로 필요한 부가 출력만 활성화 ─────────────────────
-    needs_hidden = _METHOD_NEEDS[method]["hidden_states"]
-    needs_v_hook = _METHOD_NEEDS[method]["v_hook"]
+    needs_hidden      = _METHOD_NEEDS[method]["hidden_states"]
+    needs_v_hook      = _METHOD_NEEDS[method]["v_hook"]
+    needs_attentions  = _METHOD_NEEDS[method]["output_attentions"]  # [Fix 1] RaaS용
 
     if method == "baseline":
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
@@ -90,7 +95,6 @@ def generate_with_scored_eviction(
     input_ids = inputs.input_ids
     prompt_len = input_ids.shape[1]
 
-    # ── v_hook: novelty일 때만 등록 ───────────────────────────────────────
     if needs_v_hook:
         handles, v_storage = register_v_hook(model)
     else:
@@ -129,10 +133,11 @@ def generate_with_scored_eviction(
             pos_id = torch.tensor(
                 [[reg.get_next_position_id()]], dtype=torch.long, device=device
             )
-            # ── [개선 2] decode step: method별 필요한 출력만 요청 ─────────
+
             step_out = model(
                 next_token, use_cache=True,
                 output_hidden_states=needs_hidden,
+                output_attentions=needs_attentions,   # [Fix 1] RaaS: True, 나머지: False
                 past_key_values=cache, position_ids=pos_id,
             )
             cache = step_out.past_key_values
@@ -140,31 +145,39 @@ def generate_with_scored_eviction(
             reg.register_new_token()
 
             if in_think:
-                if method =="raas":
+                # ── RaaS: attention 기반 timestamp 갱신 ─────────────────────
+                if method == "raas" and len(think_scores) > 0:
                     attentions = step_out.attentions
                     if attentions is None:
                         raise RuntimeError(
                             "RaaS requires output_attentions=True, but got None. "
-                            "Load model with attn_implementation='sdpa' or 'eager'."
+                            "Load model with attn_implementation='eager' or 'sdpa'."
                         )
-                    if len(think_scores) > 0:
-                        seq_k = attentions[0].shape[-1]
-                        # all layers +  all head mean attention: [seq_k]
-                        avg_attn = torch.zeros(seq_k, dtype=torch.float32)
-                        for la in attentions:
-                            avg_attn += la[0, :, 0, :seq_k].mean(dim=0).cpu().float()
-                            avg_attn /= len(attentions)
+                    seq_k = attentions[0].shape[-1]
 
-                            # extract attention values received by each think token
-                            think_attn = torch.tensor([float(avg_attn[prompt_len + j]) if (prompt_len + j) < seq_k else 0.0 for j in range(len(think_scores))])
-                            # top-r = 0.5: Token that received median-level or higher attention -> timestamp updated
-                            median_val = think_attn.median().item()
-                            for j in range(len(think_scores)):
-                                if float(think_attn[j]) >= median_val:
-                                    think_scores[j] = float(think_generated_count)
+                    # [Fix 2] 전 레이어 평균: 루프 밖에서 1회 나눗셈
+                    # attentions[l]: (batch=1, heads, seq_q=1, seq_k)
+                    avg_attn = torch.zeros(seq_k, dtype=torch.float32)
+                    for la in attentions:
+                        avg_attn += la[0, :, 0, :seq_k].mean(dim=0).cpu().float()
+                    avg_attn /= len(attentions)  # ← 루프 밖 (버그 수정)
+
+                    # [Fix 3] think_attn / median 계산도 루프 밖 (버그 수정)
+                    # eviction 후 캐시가 compact되므로 j번째 think 토큰 = 캐시 위치 prompt_len+j
+                    think_attn = torch.tensor([
+                        float(avg_attn[prompt_len + j]) if (prompt_len + j) < seq_k else 0.0
+                        for j in range(len(think_scores))
+                    ])
+                    median_val = think_attn.median().item()
+                    # 상위 r=50% 토큰에 최신 timestamp 부여 (RaaS Algorithm 1, line 25)
+                    for j in range(len(think_scores)):
+                        if float(think_attn[j]) >= median_val:
+                            think_scores[j] = float(think_generated_count)
+
+                # ── 각 method별 현재 토큰 score 계산 ────────────────────────
                 if method == "k_norm":
                     score = extract_last_position_knorm(cache)
-                elif method in ("donut_a_v2", "donut_a_v2_inv"): 
+                elif method in ("donut_a_v2", "donut_a_v2_inv"):
                     hs = [step_out.hidden_states[i][0, 0] for i in range(0, N_LAYERS + 1)]
                     score = scorer.score_donut_a_v2(hs)
                 elif method in ("novelty", "novelty_inv"):
@@ -174,9 +187,11 @@ def generate_with_scored_eviction(
                 elif method == "random":
                     score = float(np.random.random())
                 elif method == "raas":
+                    # 초기 timestamp = 생성 시점 (이후 attention으로 갱신됨)
                     score = float(think_generated_count)
                 else:  # v_angular, v_angular_inv
                     score = scorer.score_v_angular(v_storage)
+
                 think_scores.append(score)
                 think_generated_count += 1
 
@@ -196,25 +211,26 @@ def generate_with_scored_eviction(
                 n_cand     = len(think_scores) - RECENT_SIZE
                 if n_cand > 0:
                     valid = [(j, s) for j, s in enumerate(think_scores[:n_cand])
-                            if not np.isnan(s)]
+                             if not np.isnan(s)]
                     if valid:
                         n_actual = min(n_to_evict, len(valid))
                         sorted_valid = sorted(valid, key=lambda p: p[1],
-                                            reverse=(method in _EVICT_HIGHEST))
+                                              reverse=(method in _EVICT_HIGHEST))
                         evict_js = sorted(
                             [j for j, _ in sorted_valid[:n_actual]], reverse=True
                         )
                         evict_set = {prompt_len + j for j in evict_js}
                         n_alive   = cache.get_seq_length()
                         keep_list = [i for i in range(n_alive) if i not in evict_set]
-                        evict_from_cache(cache, keep_list)          # 텐서 재구성 1회
+                        evict_from_cache(cache, keep_list)
                         reg.evict_by_cache_indices([prompt_len + j for j in evict_js])
-                        for j in evict_js:                          # 역순이라 인덱스 안전
+                        for j in evict_js:
                             del think_scores[j]
                         n_evicted += len(evict_js)
 
             next_token = sample_next_token(next_logits)
             generated_ids.append(next_token.item())
+
     finally:
         if needs_v_hook:
             remove_hooks(handles)

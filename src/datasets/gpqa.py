@@ -34,8 +34,9 @@ def format_mcq(ex, idx: int):
     return prompt_body, correct_label
 
 
-def build_prompt(tokenizer, question_body: str) -> str:
+def build_prompt(tokenizer, question_body: str, enable_thinking: bool = True) -> str:
     msgs = [{"role": "user", "content": question_body}]
-    return tokenizer.apply_chat_template(
-        msgs, tokenize=False, add_generation_prompt=True, enable_thinking=True
-    )
+    kwargs = {"tokenize": False, "add_generation_prompt": True}
+    if enable_thinking:
+        kwargs["enable_thinking"] = True
+    return tokenizer.apply_chat_template(msgs, **kwargs)

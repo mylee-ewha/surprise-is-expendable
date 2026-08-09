@@ -29,13 +29,15 @@ from src.utils.io import _load_completed
 # Config
 # ═══════════════════════════════════════════════════════════════
 GPU_ID            = "5"
-MODEL_NAME        = "Qwen/Qwen3-8B"
+MODEL_NAME        = "Qwen/Qwen3-8B"                             # enable_thinking=True로 변경
+#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" # enable_thinking=False로 변경
 KV_BUDGETS        = [512, 1024, 2048, 4096]
 #METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random"]
 METHODS           = ["random"]
 METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline"}
 MAX_NEW_TOKENS_EXP = 16384             # GPQA는 긴 추론 필요
 OUT_DIR           = Path("results/gpqa_ablation")
+#OUT_DIR           = Path("results/gpqa_ablation_deepseek")
 
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
 
@@ -47,8 +49,13 @@ def run():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    # METHODS에 raas가 있을 때만 eager 사용
+    attn_impl = "eager" if "raas" in METHODS else "sdpa"
+
     model     = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME, torch_dtype=torch.bfloat16, device_map=device
+        MODEL_NAME, torch_dtype=torch.bfloat16, device_map=device,
+        attn_implementation=attn_impl,
     )
     model.eval()
 
@@ -89,7 +96,7 @@ def run():
 
                 for idx, ex in pbar:
                     body, gold = format_mcq(ex, idx)
-                    prompt     = build_prompt(tokenizer, body)
+                    prompt     = build_prompt(tokenizer, body, enable_thinking=True)
 
                     gen = generate_with_scored_eviction(
                         model, tokenizer, prompt, method, budget or 0, device,
@@ -143,6 +150,7 @@ def run():
                 if method != "baseline":
                     row["avg_n_evicted"]           = total_evicted / n
                     row["achieved_eviction_ratio"] = total_evicted / max(total_think, 1)
+                    row["frac_samples_eviction_triggered"] = n_triggered / n
 
                 f.write(json.dumps(row) + "\n")
                 f.flush()
