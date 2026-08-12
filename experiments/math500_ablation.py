@@ -23,17 +23,19 @@ from src.utils.io import _load_completed
 # ═══════════════════════════════════════════════════════════════
 # Config
 # ═══════════════════════════════════════════════════════════════
-GPU_ID            = "6"
-MODEL_NAME        = "Qwen/Qwen3-8B"                                 # enable_thinking=True로 변경
-#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"     # enable_thinking=False로 변경
+GPU_ID            = "4"
+MODEL_NAME        = "Qwen/Qwen3-8B"                                 # enable_thinking=True
+#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"     # enable_thinking=False
 N_SAMPLES         = 500
 KV_BUDGETS        = [512, 1024, 2048, 4096]
-#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random"]
-METHODS           = ["novelty"]
-METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline"}
+#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random", "rkv"]
+METHODS           = ["raas"]
+METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline", "raas", "rkv"}
 MAX_NEW_TOKENS_EXP = MAX_NEW_TOKENS        # 8192 (generation.py 기본값)
 OUT_DIR           = Path("results/math500_ablation")
 #OUT_DIR           = Path("results/math500_ablation_deepseek")
+
+ENABLE_THINKING   = "Qwen" in MODEL_NAME
 
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
 
@@ -47,7 +49,7 @@ def run():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     # METHODS에 raas가 있을 때만 eager 사용
-    attn_impl = "eager" if "raas" in METHODS else "sdpa"
+    attn_impl = "eager" if any(m in METHODS for m in ["raas", "rkv"]) else "sdpa"
 
     model     = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, torch_dtype=torch.bfloat16, device_map=device,
@@ -89,7 +91,7 @@ def run():
                 pbar  = tqdm(subset, desc=label)
 
                 for idx, ex in enumerate(pbar):
-                    prompt = build_prompt(tokenizer, ex["problem"], enable_thinking=True)
+                    prompt = build_prompt(tokenizer, ex["problem"], enable_thinking=ENABLE_THINKING)
                     gold   = ex["answer"]
 
                     gen = generate_with_scored_eviction(

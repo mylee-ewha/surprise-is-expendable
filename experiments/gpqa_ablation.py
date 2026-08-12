@@ -29,15 +29,17 @@ from src.utils.io import _load_completed
 # Config
 # ═══════════════════════════════════════════════════════════════
 GPU_ID            = "5"
-MODEL_NAME        = "Qwen/Qwen3-8B"                             # enable_thinking=True로 변경
-#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" # enable_thinking=False로 변경
+#MODEL_NAME        = "Qwen/Qwen3-8B"                                # enable_thinking=True
+MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"      # enable_thinking=False
 KV_BUDGETS        = [512, 1024, 2048, 4096]
-#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random"]
-METHODS           = ["random"]
-METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline"}
+#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random", "rkv"]
+METHODS           = ["baseline"]
+METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline", "raas", "rkv"}
 MAX_NEW_TOKENS_EXP = 16384             # GPQA는 긴 추론 필요
-OUT_DIR           = Path("results/gpqa_ablation")
-#OUT_DIR           = Path("results/gpqa_ablation_deepseek")
+#OUT_DIR           = Path("results/gpqa_ablation")
+OUT_DIR           = Path("results/gpqa_ablation_deepseek")
+
+ENABLE_THINKING   = "Qwen" in MODEL_NAME
 
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
 
@@ -51,7 +53,7 @@ def run():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     # METHODS에 raas가 있을 때만 eager 사용
-    attn_impl = "eager" if "raas" in METHODS else "sdpa"
+    attn_impl = "eager" if any(m in METHODS for m in ["raas", "rkv"]) else "sdpa"
 
     model     = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, torch_dtype=torch.bfloat16, device_map=device,
@@ -96,7 +98,7 @@ def run():
 
                 for idx, ex in pbar:
                     body, gold = format_mcq(ex, idx)
-                    prompt     = build_prompt(tokenizer, body, enable_thinking=True)
+                    prompt     = build_prompt(tokenizer, body, enable_thinking=ENABLE_THINKING)
 
                     gen = generate_with_scored_eviction(
                         model, tokenizer, prompt, method, budget or 0, device,
