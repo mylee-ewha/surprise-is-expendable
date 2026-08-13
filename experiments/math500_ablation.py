@@ -24,16 +24,16 @@ from src.utils.io import _load_completed
 # Config
 # ═══════════════════════════════════════════════════════════════
 GPU_ID            = "4"
-MODEL_NAME        = "Qwen/Qwen3-8B"                                 # enable_thinking=True
-#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"     # enable_thinking=False
+#MODEL_NAME        = "Qwen/Qwen3-8B"                                 # enable_thinking=True
+MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"     # enable_thinking=False
 N_SAMPLES         = 500
 KV_BUDGETS        = [512, 1024, 2048, 4096]
 #METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random", "rkv"]
 METHODS           = ["raas"]
 METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline", "raas", "rkv"}
 MAX_NEW_TOKENS_EXP = MAX_NEW_TOKENS        # 8192 (generation.py 기본값)
-OUT_DIR           = Path("results/math500_ablation")
-#OUT_DIR           = Path("results/math500_ablation_deepseek")
+#OUT_DIR           = Path("results/math500_ablation")
+OUT_DIR           = Path("results/math500_ablation_deepseek")
 
 ENABLE_THINKING   = "Qwen" in MODEL_NAME
 

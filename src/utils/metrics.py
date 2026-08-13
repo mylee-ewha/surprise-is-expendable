@@ -57,3 +57,22 @@ def extract_mcq_answer(text: str):
 
 def is_correct_mcq(pred, gold) -> bool:
     return pred is not None and pred.upper() == gold.upper()
+
+# ── AIME (정수 0-999) ──────────────────────────────────────────
+def extract_aime_answer(text: str):
+    """\\boxed{} 안에서 0-999 정수 추출. 없으면 None."""
+    raw = extract_boxed_answer(text)
+    if raw is None:
+        return None
+    try:
+        val = int(raw.strip())
+        if 0 <= val <= 999:
+            return val
+    except ValueError:
+        pass
+    return None
+
+
+def is_correct_aime(pred, gold) -> bool:
+    """pred: int or None, gold: int"""
+    return pred is not None and int(pred) == int(gold)

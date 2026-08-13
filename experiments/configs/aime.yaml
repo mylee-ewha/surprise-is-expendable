@@ -1,0 +1,9 @@
+# experiments/configs/aime.yaml
+gpu_id: "4"
+model_name: "Qwen/Qwen3-8B"
+kv_budgets: [2048, 4096, 8192, 16384]
+methods: ["baseline", "novelty_inv", "lru", "random", "raas", "rkv"]
+seeds: [42, 1234, 5678]
+max_new_tokens: 30000
+n_problems: 60   # AIME 2024 I+II + 2025 I+II
+out_dir: "results/aime_ablation"
