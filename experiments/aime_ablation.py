@@ -2,7 +2,8 @@
 AIME Ablation — 3 seeds × 60 problems
 ======================================
 - Budget [2048, 4096, 8192, 16384] (MATH500 대비 오른쪽 스케일)
-- MAX_NEW_TOKENS = 30000 (32K context 확보)
+- MAX_NEW_TOKENS = 32768 (32K context 확보)
+- baseline도 3 seeds 실행
 - 각 (method, budget, seed) 단위로 results.jsonl에 저장 → resume 지원
 - 모든 seed 완료 시 results_agg.jsonl에 mean ± std 저장
 """
@@ -30,10 +31,11 @@ GPU_ID            = "4"
 MODEL_NAME        = "Qwen/Qwen3-8B"
 #MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 KV_BUDGETS        = [2048, 4096, 8192, 16384]
-METHODS           = ["baseline", "novelty_inv", "lru", "random", "raas", "rkv", "knorm", "novelty"]
+#METHODS           = ["baseline", "novelty_inv", "lru", "random", "raas", "rkv", "knorm", "novelty"]
+METHODS           = ["baseline"]
 METHODS_SAVE_TEXT = {"baseline", "novelty_inv", "lru", "raas", "rkv", "knorm"}
 SEEDS             = [42, 1234, 5678]          # 3 runs, pass@1 averaged
-MAX_NEW_TOKENS_EXP = 30000                    # 32K context 기준 여유있게
+MAX_NEW_TOKENS_EXP = 32768                    # 32K context 기준 여유있게
 OUT_DIR           = Path("results/aime_ablation")
 #OUT_DIR           = Path("results/aime_ablation_deepseek")
 
@@ -124,12 +126,11 @@ def run():
 
         for method in METHODS:
             budgets = [None] if method == "baseline" else KV_BUDGETS
-            seeds   = [None] if method == "baseline" else SEEDS
 
             for budget in budgets:
                 # ── 각 seed 실행 ───────────────────────────────────────
                 seed_accs = []
-                for seed in seeds:
+                for seed in SEEDS:
                     key = (method, budget, seed)
                     if key in completed:
                         # 이미 완료된 seed — acc 복원해서 집계에 포함
@@ -249,11 +250,11 @@ def run():
                     print(f"[skip agg] {method} budget={budget}")
                     continue
 
-                if len(seed_accs) == len(seeds):
+                if len(seed_accs) == len(SEEDS):
                     agg_row = {
                         "method":    method,
                         "kv_budget": budget,
-                        "seeds":     seeds,
+                        "seeds":     SEEDS,
                         "n_runs":    len(seed_accs),
                         "mean_acc":  float(np.mean(seed_accs)),
                         "std_acc":   float(np.std(seed_accs)),
