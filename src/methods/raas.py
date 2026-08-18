@@ -1,33 +1,50 @@
 """
-RaaS: Reasoning-Aware Attention Sparsity
-ACL Findings 2025 — Hu et al.
+RaaS Re-implementation
+======================
+Original paper: Hu et al. (2025), "RaaS: Reasoning-Aware Attention
+Sparsity for Efficient LLM Reasoning", ACL Findings 2025.
+Original code:  Not publicly available; re-implemented from the paper.
 
-알고리즘 요약 (Section 3.2):
-  - Milestone tokens: 처음엔 high attention → 점차 attention 감소 → never recover
-    (수학 증명의 lemma처럼 등장 후 소진)
-  - Phoenix tokens: 낮은 attention 기간 후 다시 중요해지는 토큰 (주로 prefill에 등장)
+We re-implement RaaS within our unified token-level eviction framework
+to enable fair comparison under identical evaluation conditions
+(same lazy-batch schedule I=128, same budget definition, same model
+checkpoints and sampling parameters).
 
-스코어링 메커니즘 (timestamp 기반 LRU):
-  - 매 decode step에서 attention score가 median 이상인 상위 r=50% 토큰에
-    최신 timestamp(현재 step 번호)를 부여
-  - Cache full 시 → timestamp가 가장 오래된 토큰(= 오랫동안 attention 못 받은 토큰) evict
+Fidelity to original:
+  - Core mechanism: LRU-based eviction with attention-score timestamps.
+    At each decode step, tokens receiving attention scores above the
+    median (top-r=50% by attention) are assigned the latest timestamp;
+    eviction removes tokens with the oldest timestamps (Algorithm 1).
+  - Timestamp retention ratio: r=0.5 (paper default, Section 3.2).
+  - Prefill tokens: fully retained without eviction, consistent with
+    the original design (Algorithm 1, line 22).
+  - Milestone token intuition: tokens that continue to receive high
+    attention accumulate recent timestamps and are preserved;
+    tokens whose attention fades are evicted as "non-milestone".
 
-LRU와의 차이:
-  - Pure LRU: 생성 시점이 가장 오래된 토큰 evict (recency of generation)
-  - RaaS: 마지막으로 의미 있는 attention을 받은 시점이 가장 오래된 토큰 evict
-           (recency of attention) → milestone token이 오래 살아남음
+Known deviations (due to unified-framework constraints, applied equally
+to all methods including ours):
+  1. Attention computation: token-level naive implementation using
+     output_attentions=True (full attention matrix, eager/sdpa mode),
+     vs. the original's page-based lightweight Q·K_rep pass compatible
+     with FlashAttention (Section 3.3 of the paper). This gives RaaS
+     attention-exact scores, which is strictly more favorable to RaaS
+     than the approximate page-based variant.
+  2. Eviction granularity: token-level uniform eviction across all
+     heads and layers, vs. page-level eviction (page_size=16) in the
+     original.
+  3. Recent-token protection window: rho=16 tokens (our framework
+     default) vs. the original's observation window alpha.
+  4. Eviction schedule: lazy batch (every 128 steps) vs. the original's
+     continuous per-step eviction.
 
-FA 호환성:
-  - Naive RaaS: post-softmax attention 필요 → FA 비호환
-  - Page-based RaaS (논문 Section 3.3): Q·K_rep 별도 계산 → FA 호환
-  - 우리 구현: accuracy 비교 목적으로 naive 방식 사용 (output_attentions=True)
-  - 모델 로드 시 attn_implementation="sdpa" 또는 "eager" 필수
-
-하이퍼파라미터:
-  - RAAS_R = 0.5: 매 step 상위 50% 토큰이 timestamp 갱신 (논문 기본값)
-  - page_size = 16 (논문), 우리 구현에서는 token-level로 단순화
-  - prefill 토큰 전체 보호 (eviction 대상 아님) — 기존 코드와 동일
+Deviations (2), (3), (4) apply equally to ALL baselines including our
+method, preserving intra-framework fairness. Deviation (1) affects only
+RaaS and is strictly favorable to RaaS (attention-exact vs. approximate),
+meaning our comparison does not disadvantage RaaS relative to its
+reported results.
 """
 
-# 매 decode step에서 attention 상위 r 비율 토큰에 최신 timestamp 부여
+# Timestamp retention ratio r (top-r fraction of tokens receive the
+# latest timestamp at each decode step). Default: 0.5 (paper Table 1).
 RAAS_R: float = 0.5

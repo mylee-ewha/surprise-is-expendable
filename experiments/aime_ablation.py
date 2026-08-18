@@ -28,16 +28,16 @@ from src.utils.metrics import extract_aime_answer, is_correct_aime
 # Config
 # ═══════════════════════════════════════════════════════════════
 GPU_ID            = "4"
-MODEL_NAME        = "Qwen/Qwen3-8B"
-#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+#MODEL_NAME        = "Qwen/Qwen3-8B"
+MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 KV_BUDGETS        = [2048, 4096, 8192, 16384]
 #METHODS           = ["baseline", "novelty_inv", "lru", "random", "raas", "rkv", "knorm", "novelty"]
 METHODS           = ["baseline"]
 METHODS_SAVE_TEXT = {"baseline", "novelty_inv", "lru", "raas", "rkv", "knorm"}
 SEEDS             = [42, 1234, 5678]          # 3 runs, pass@1 averaged
 MAX_NEW_TOKENS_EXP = 32768                    # 32K context 기준 여유있게
-OUT_DIR           = Path("results/aime_ablation")
-#OUT_DIR           = Path("results/aime_ablation_deepseek")
+#OUT_DIR           = Path("results/aime_ablation")
+OUT_DIR           = Path("results/aime_ablation_deepseek")
 
 ENABLE_THINKING   = "Qwen" in MODEL_NAME
 
