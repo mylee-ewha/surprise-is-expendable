@@ -1,12 +1,7 @@
 """
-GPQA Diamond Accuracy Ablation
-===============================
+MATH500 Accuracy Ablation
+=========================
 thin runner — config만 여기, 로직은 전부 src/ 에서 import
-
-기존 gpqa 코드와 다른 점:
-  - generate_with_scored_eviction 으로 통일 (run_baseline/run_eviction 분리 제거)
-  - BlockRegistry 포지션 추적 (prompt_len + step 방식 제거)
-  - pred 추출: generate 반환값 무시하고 extract_mcq_answer 로 재추출
 """
 import os
 import json
@@ -20,25 +15,24 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import src.core.scorers as _scorers
-from src.core.generation import generate_with_scored_eviction
-from src.datasets.gpqa import load_gpqa, format_mcq, build_prompt
-from src.utils.metrics import extract_mcq_answer, is_correct_mcq
+from src.core.generation import generate_with_scored_eviction, MAX_NEW_TOKENS
+from src.datasets.math500 import load_fixed_subset, build_prompt
+from src.utils.metrics import is_correct
 from src.utils.io import _load_completed
 
 # ═══════════════════════════════════════════════════════════════
 # Config
 # ═══════════════════════════════════════════════════════════════
-GPU_ID            = "4"
-#MODEL_NAME        = "Qwen/Qwen3-8B"                                # enable_thinking=True
-MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"      # enable_thinking=False
+GPU_ID            = "6"
+MODEL_NAME        = "Qwen/Qwen3-8B"                                 # enable_thinking=True
+#MODEL_NAME        = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"     # enable_thinking=False
+N_SAMPLES         = 500
 KV_BUDGETS        = [512, 1024, 2048, 4096]
-#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random", "raas", "rkv"]
-METHODS           = ["novelty"]
-METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline", "raas", "rkv"}
-MAX_NEW_TOKENS_EXP = 16384             # GPQA는 긴 추론 필요
-#OUT_DIR           = Path("results/gpqa_ablation")
-OUT_DIR           = Path("results/gpqa_ablation_deepseek")
-
+#METHODS           = ["baseline", "novelty_inv", "novelty", "k_norm", "lru", "random", "rkv", "novelty_inv_le"]
+METHODS           = ["novelty_inv_le"]
+METHODS_SAVE_TEXT = {"lru", "novelty_inv", "k_norm", "baseline", "raas", "rkv", "novelty_inv_le"}
+MAX_NEW_TOKENS_EXP = MAX_NEW_TOKENS        # 8192 (generation.py 기본값)
+OUT_DIR = Path("results/loop_escape_ablation")
 ENABLE_THINKING   = "Qwen" in MODEL_NAME
 
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
@@ -69,9 +63,7 @@ def run():
                       device=device).float() * 2.0 - 1.0
     ) * (_scorers.NOVELTY_K ** -0.5)
 
-    ds = load_gpqa()
-    print(f"GPQA Diamond: {len(ds)} questions")
-
+    subset = load_fixed_subset(n=N_SAMPLES)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     out_path        = OUT_DIR / "results.jsonl"
@@ -90,41 +82,38 @@ def run():
                     print(f"[skip] {method} budget={budget}")
                     continue
 
-                correct = total_think = total_evicted = n_truncated = n_triggered = 0
+                correct = total_think = total_evicted = n_truncated = total_total = n_triggered = 0
                 per_sample_rows, per_text_rows = [], []
 
-                label = f"{method}" + (f" @{budget}" if budget else "")
-                pbar  = tqdm(enumerate(ds), total=len(ds), desc=label)
+                label = f"{method}" + (f" budget={budget}" if budget else "")
+                pbar  = tqdm(subset, desc=label)
 
-                for idx, ex in pbar:
-                    body, gold = format_mcq(ex, idx)
-                    prompt     = build_prompt(tokenizer, body, enable_thinking=ENABLE_THINKING)
+                for idx, ex in enumerate(pbar):
+                    prompt = build_prompt(tokenizer, ex["problem"], enable_thinking=ENABLE_THINKING)
+                    gold   = ex["answer"]
 
                     gen = generate_with_scored_eviction(
                         model, tokenizer, prompt, method, budget or 0, device,
                         max_new_tokens=MAX_NEW_TOKENS_EXP,
                     )
 
-                    # generate_with_scored_eviction은 extract_boxed_answer를 씀
-                    # GPQA는 MCQ 형식이므로 text에서 직접 재추출
-                    pred = extract_mcq_answer(gen["text"])
-                    ok   = is_correct_mcq(pred, gold)
-
+                    ok = is_correct(gen["pred"], gold)
                     correct     += ok
                     total_think += gen["think_tokens_generated"]
+                    total_total += gen["total_tokens_generated"]
                     n_truncated += int(gen["truncated"])
 
                     per_sample_rows.append({
                         "idx":                    idx,
                         "method":                 method,
                         "budget":                 budget,
-                        "gold":                   gold,
-                        "pred":                   pred,
-                        "correct":                ok,
                         "think_tokens_generated": gen["think_tokens_generated"],
                         "total_tokens_generated": gen["total_tokens_generated"],
                         "truncated":              gen["truncated"],
-                        "n_evicted":              gen.get("n_evicted", 0),
+                        "correct":                ok,
+                        "loop_evictions":         gen.get("loop_evictions"),      # ← 추가
+                        "loop_token_count":       gen.get("loop_token_count"),    # ← 추가
+                        "loop_events":            gen.get("loop_events"),         # ← 추가
                     })
                     per_text_rows.append(
                         gen["text"].split("</think>")[0]
@@ -137,22 +126,29 @@ def run():
                         total_evicted += n_evicted
                         if n_evicted > 0:
                             n_triggered += 1
-                        postfix["evict%"] = f"{total_evicted / max(total_think, 1):.1%}"
+                        postfix["evicted"] = f"{total_evicted / max(total_think, 1):.1%}"
                     pbar.set_postfix(**postfix)
 
-                n   = len(ds)
+                n   = len(subset)
                 row = {
-                    "method":                     method,
-                    "kv_budget":                  budget,
-                    "n":                          n,
-                    "acc":                        correct / n,
-                    "avg_think_tokens_generated": total_think / n,
-                    "frac_truncated":             n_truncated / n,
+                    "method":                        method,
+                    "kv_budget":                     budget,
+                    "n":                             n,
+                    "acc":                           correct / n,
+                    "avg_think_tokens_generated":    total_think / n,
+                    "avg_total_tokens_generated":    total_total / n,
+                    "avg_answer_tokens_generated":   (total_total - total_think) / n,
+                    "frac_truncated":                n_truncated / n,
                 }
                 if method != "baseline":
-                    row["avg_n_evicted"]           = total_evicted / n
-                    row["achieved_eviction_ratio"] = total_evicted / max(total_think, 1)
-                    row["frac_samples_eviction_triggered"] = n_triggered / n
+                    row["avg_n_evicted"]                    = total_evicted / n
+                    row["achieved_eviction_ratio"]          = total_evicted / max(total_think, 1)
+                    row["frac_samples_eviction_triggered"]  = n_triggered / n
+                if method == "novelty_inv_le":                                    # ← 추가 블록
+                    n_loop = sum(1 for r in per_sample_rows if (r.get("loop_evictions") or 0) > 0)
+                    row["frac_samples_loop_detected"] = n_loop / n
+                    row["avg_loop_evictions"] = sum(
+                        (r.get("loop_evictions") or 0) for r in per_sample_rows) / n
 
                 f.write(json.dumps(row) + "\n")
                 f.flush()

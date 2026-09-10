@@ -13,6 +13,7 @@ from ..methods.r_kv import (
     make_attn_history, update_attn_history, compute_rkv_scores,
     RKV_BUFFER_SIZE,
 )
+from ..methods.loop_escape import LoopDetector, select_evict_indices
 
 
 EVICT_INTERVAL  = 128   # lazy eviction 간격 (= RKV_BUFFER_SIZE 와 동일)
@@ -38,6 +39,7 @@ _METHOD_NEEDS = {
     # R-KV: importance(attention) + redundancy(K-cosine), output_attentions=True
     # eager/sdpa 모드 필수
     "rkv":            {"hidden_states": False, "v_hook": False, "output_attentions": True},
+    "novelty_inv_le": {"hidden_states": False, "v_hook": True,  "output_attentions": False},
 }
 
 _EVICT_HIGHEST = {"donut_a_v2_inv", "novelty_inv", "v_angular_inv"}
@@ -66,6 +68,7 @@ def sample_next_token(logits, temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K)
 def generate_with_scored_eviction(
     model, tokenizer, prompt, method, budget, device,
     max_new_tokens=MAX_NEW_TOKENS,
+    loop_enter=0.20, loop_exit=0.08, oldest_frac=0.40,
 ):
     needs_hidden     = _METHOD_NEEDS[method]["hidden_states"]
     needs_v_hook     = _METHOD_NEEDS[method]["v_hook"]
@@ -122,6 +125,12 @@ def generate_with_scored_eviction(
         reg.add_tokens_batch(prompt_len)
 
         scorer                = PerSampleScorer(method, device)
+        detector              = (LoopDetector(enter_threshold=loop_enter,
+                                              exit_threshold=loop_exit)
+                                 if method == "novelty_inv_le" else None)
+        loop_events      = []
+        loop_token_count = 0
+        loop_evictions   = 0
         think_scores          = []
         think_generated_count = 0
         n_evicted             = 0
@@ -189,7 +198,7 @@ def generate_with_scored_eviction(
                 elif method in ("donut_a_v2", "donut_a_v2_inv"):
                     hs    = [step_out.hidden_states[i][0, 0] for i in range(0, N_LAYERS + 1)]
                     score = scorer.score_donut_a_v2(hs)
-                elif method in ("novelty", "novelty_inv"):
+                elif method in ("novelty", "novelty_inv", "novelty_inv_le"):
                     score = scorer.score_novelty(v_storage)
                 elif method == "lru":
                     score = float(think_generated_count)
@@ -204,6 +213,17 @@ def generate_with_scored_eviction(
                     score = scorer.score_v_angular(v_storage)
 
                 think_scores.append(score)
+                if detector is not None:
+                    was = detector.in_loop
+                    now = detector.update(next_token.item())
+                    if now != was:
+                        loop_events.append({
+                            "t": think_generated_count,
+                            "event": "enter" if now else "exit",
+                            "rep": round(detector.rep_rate(), 4),
+                        })
+                    if now:
+                        loop_token_count += 1
                 think_generated_count += 1
 
             piece = tokenizer.decode([next_token.item()], skip_special_tokens=True)
@@ -227,20 +247,12 @@ def generate_with_scored_eviction(
                         think_scores[j] = z
 
                 # ── 공통 eviction 로직 ────────────────────────────────────────
-                n_to_evict = len(think_scores) - budget
-                n_cand     = len(think_scores) - RECENT_SIZE
-                if n_cand > 0:
-                    valid = [(j, s) for j, s in enumerate(think_scores[:n_cand])
-                             if not np.isnan(s)]
-                    if valid:
-                        n_actual     = min(n_to_evict, len(valid))
-                        sorted_valid = sorted(
-                            valid, key=lambda p: p[1],
-                            reverse=(method in _EVICT_HIGHEST),
-                        )
-                        evict_js  = sorted(
-                            [j for j, _ in sorted_valid[:n_actual]], reverse=True
-                        )
+                if method == "novelty_inv_le":
+                    evict_js = select_evict_indices(
+                        think_scores, detector.in_loop, budget,
+                        RECENT_SIZE, oldest_frac,
+                    )
+                    if evict_js:
                         evict_set = {prompt_len + j for j in evict_js}
                         n_alive   = cache.get_seq_length()
                         keep_list = [i for i in range(n_alive) if i not in evict_set]
@@ -249,8 +261,33 @@ def generate_with_scored_eviction(
                         for j in evict_js:
                             del think_scores[j]
                         n_evicted += len(evict_js)
-                        if method == "rkv":
-                            rkv_history.clear()
+                        if detector.in_loop:
+                            loop_evictions += 1
+                else: 
+                    n_to_evict = len(think_scores) - budget
+                    n_cand     = len(think_scores) - RECENT_SIZE
+                    if n_cand > 0:
+                        valid = [(j, s) for j, s in enumerate(think_scores[:n_cand])
+                                if not np.isnan(s)]
+                        if valid:
+                            n_actual     = min(n_to_evict, len(valid))
+                            sorted_valid = sorted(
+                                valid, key=lambda p: p[1],
+                                reverse=(method in _EVICT_HIGHEST),
+                            )
+                            evict_js  = sorted(
+                                [j for j, _ in sorted_valid[:n_actual]], reverse=True
+                            )
+                            evict_set = {prompt_len + j for j in evict_js}
+                            n_alive   = cache.get_seq_length()
+                            keep_list = [i for i in range(n_alive) if i not in evict_set]
+                            evict_from_cache(cache, keep_list)
+                            reg.evict_by_cache_indices([prompt_len + j for j in evict_js])
+                            for j in evict_js:
+                                del think_scores[j]
+                            n_evicted += len(evict_js)
+                            if method == "rkv":
+                                rkv_history.clear()
 
             next_token = sample_next_token(next_logits)
             generated_ids.append(next_token.item())
@@ -272,4 +309,7 @@ def generate_with_scored_eviction(
         "truncated":              in_think,
         "n_evicted":              n_evicted,
         "final_seq_len":          cache.get_seq_length(),
+        "loop_events":      loop_events if detector else None,
+        "loop_token_count": loop_token_count if detector else None,
+        "loop_evictions":   loop_evictions if detector else None,
     }

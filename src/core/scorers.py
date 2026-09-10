@@ -74,7 +74,7 @@ class PerSampleScorer:
         self.donut_zscorers = (
             {i: CausalZScorer() for i in DONUT_BAND} if method in ("donut_a_v2", "donut_a_v2_inv") else None
         )
-        self.novelty_scorers = {} if method in ("novelty", "novelty_inv") else None 
+        self.novelty_scorers = {} if method in ("novelty", "novelty_inv", "novelty_inv_le") else None 
         self.prev_v_all = None
 
     def score_k_norm(self, cache) -> float:

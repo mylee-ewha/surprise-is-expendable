@@ -25,12 +25,14 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.core.cache_ops import BlockRegistry, evict_from_cache, RECENT_SIZE
+from src.datasets.math500 import load_fixed_subset
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIG — 이 섹션만 수정
 # ═══════════════════════════════════════════════════════════════════════════
-GPU_ID          = "4"
+GPU_ID          = "6"
 MODEL_NAME      = "Qwen/Qwen3-8B"
 NOVELTY_K       = 32
 LAMBDA_RIDGE    = 1.0
@@ -42,7 +44,7 @@ TEMPERATURE, TOP_P, TOP_K = 0.6, 0.95, 20
 MAX_NEW_TOKENS  = 8192
 
 # per-sample 결과 파일 경로 (실험 디렉토리에 맞게 수정)
-MATH500_PER_SAMPLE = Path("results/scenario_b_ablation/results_per_sample.jsonl")
+MATH500_PER_SAMPLE = Path("results/math500_ablation/results_per_sample.jsonl")
 GPQA_PER_SAMPLE    = Path("results/gpqa_ablation/results_per_sample.jsonl")
 
 LOG_DIR  = Path("vtilde_logs")
@@ -52,14 +54,25 @@ PLOT_DIR = Path("vtilde_plots")
 # idx를 이미 알고 있으면 여기 추가. 없으면 auto-detect에서 채워줌.
 # category: 'A' | 'B' | 'C' | 'D' (색상 및 제목 구분용)
 MANUAL_TARGETS = [
-    {"label": "gpqa_C_idx112", "dataset": "gpqa",
-     "idx": 112, "budget": 1024, "category": "C"},
-    # {"label": "math_A_idx5",  "dataset": "math500",
-    #  "idx": 5,   "budget": 2048, "category": "A"},
+    # ── circular loop (truncated, rep8 높음) ──
+    {"label": "math_circ_idx328", "dataset": "math500",
+     "idx": 328, "budget": 512, "category": "A"},
+    {"label": "math_circ_idx338", "dataset": "math500",
+     "idx": 338, "budget": 512, "category": "A"},
+    {"label": "math_circ_idx469", "dataset": "math500",
+     "idx": 469, "budget": 512, "category": "A"},
+
+    # ── 정상 완주 (not truncated, correct, rep8=0) ──
+    {"label": "math_norm_idx4",  "dataset": "math500",
+     "idx": 4,  "budget": 512, "category": "B"},
+    {"label": "math_norm_idx5",  "dataset": "math500",
+     "idx": 5,  "budget": 512, "category": "B"},
+    {"label": "math_norm_idx15", "dataset": "math500",
+     "idx": 15, "budget": 512, "category": "B"},
 ]
 
 # True: MANUAL_TARGETS만 실행  /  False: auto-detect 결과와 합침
-MANUAL_ONLY = False
+MANUAL_ONLY = True
 
 # auto-detect: 카테고리(A/B/C/D)당 최대 몇 개 선정
 N_AUTO_PER_CAT = 1
@@ -87,10 +100,8 @@ def _load_and_cache(key, loader_fn):
         _ds_cache[key] = loader_fn()
     return _ds_cache[key]
 
-def load_math500(n=100, seed=42):
-    ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
-    idx = list(range(len(ds))); random.Random(seed).shuffle(idx)
-    return ds.select(idx[:n])
+def load_math500(n=500, seed=42):
+    return load_fixed_subset(n=500, seed=42)
 
 def load_gpqa():
     return load_dataset(GPQA_DATASET_NAME, GPQA_DATASET_CONFIG, split=GPQA_SPLIT)
