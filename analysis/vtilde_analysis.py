@@ -47,8 +47,8 @@ MAX_NEW_TOKENS  = 8192
 MATH500_PER_SAMPLE = Path("results/math500_ablation/results_per_sample.jsonl")
 GPQA_PER_SAMPLE    = Path("results/gpqa_ablation/results_per_sample.jsonl")
 
-LOG_DIR  = Path("vtilde_logs")
-PLOT_DIR = Path("vtilde_plots")
+LOG_DIR  = Path("analysis/vtilde_logs")
+PLOT_DIR = Path("analysis/vtilde_plots")
 
 # ── Manual 타겟 지정 ──────────────────────────────────────────
 # idx를 이미 알고 있으면 여기 추가. 없으면 auto-detect에서 채워줌.

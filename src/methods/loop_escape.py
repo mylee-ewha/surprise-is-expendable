@@ -8,8 +8,8 @@ from collections import deque
 class LoopDetector:
     """생성 텍스트의 n-gram 반복률을 실시간 추적."""
 
-    def __init__(self, window=200, ngram_n=8,
-                 enter_threshold=0.20, exit_threshold=0.08, min_confirm=32):
+    def __init__(self, window=400, ngram_n=8,
+                 enter_threshold=0.40, exit_threshold=0.16, min_confirm=32):
         self.window = window
         self.n = ngram_n
         self.enter = enter_threshold

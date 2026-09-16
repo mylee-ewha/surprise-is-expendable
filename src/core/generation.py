@@ -68,7 +68,7 @@ def sample_next_token(logits, temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K)
 def generate_with_scored_eviction(
     model, tokenizer, prompt, method, budget, device,
     max_new_tokens=MAX_NEW_TOKENS,
-    loop_enter=0.20, loop_exit=0.08, oldest_frac=0.40,
+    loop_enter=0.40, loop_exit=0.16, oldest_frac=0.40,
 ):
     needs_hidden     = _METHOD_NEEDS[method]["hidden_states"]
     needs_v_hook     = _METHOD_NEEDS[method]["v_hook"]

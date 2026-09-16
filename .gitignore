@@ -1,7 +1,9 @@
 # experiment results
 results/
-vtilde_logs/
-vtilde_plots/
+analysis/vtilde_logs/
+analysis/vtilde_logs_rep/
+analysis/vtilde_plots/
+analysis/rsweep_logs/
 analysis/plots/
 
 # file type
