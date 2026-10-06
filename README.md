@@ -48,3 +48,20 @@ python analysis/plot_mechanism.py
 ```
 
 ## Code Structure
+src/core/ — eviction engine (score tracking, KV cache ops, generation loop)
+src/datasets/ — MATH500, GPQA Diamond, AIME loaders
+src/methods/ — LRU, Random, RaaS, R-KV, k-norm, Novelty baselines
+src/utils/ — metrics, I/O
+experiments/ — one runner script per benchmark
+analysis/ — visualization and per-sample analysis
+
+
+## Citation
+
+```bibtex
+@article{sie2026,
+  title  = {Surprise Is Expendable: Streaming KV Eviction via Information Novelty for Thinking LLMs},
+  author = {Anonymous},
+  year   = {2026},
+}
+```
